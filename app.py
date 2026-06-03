@@ -1,22 +1,33 @@
 """
-LALA Secretary — Step 1 voice proof.
+LALA Secretary — Step 2 voice + listen.
 
-A single /voice endpoint that Twilio calls when a phone call comes in.
-It returns TwiML telling Twilio to speak one line in LALA's voice, then hang up.
+Flow:
+  1. Caller dials in -> /voice
+  2. LALA speaks the greeting (slowed), then asks who's calling and why.
+  3. <Gather> records the caller's speech and Twilio transcribes it.
+  4. Twilio POSTs the transcription to /handle_response.
+  5. LALA acknowledges ("Theek hai, main bhai ko bata doonga.") and hangs up.
 
-This is intentionally minimal: no contact lookup, no SMS, no message-taking,
-no transfer. Just proves a caller hears LALA through Twilio.
+Still no contact lookup, no message recording, no transfer, no SMS — those
+come in later steps. The two-endpoint pattern here (speak -> gather ->
+handle) is the foundation everything else builds on.
 
-Later steps add: contact lookup, <Gather> for the caller's reply, message
-recording, transfer to your cell, and an /sms endpoint — all on this same app.
+Render Free tier: fine for testing (wake /voice in a browser first).
 """
 
 from flask import Flask, request, Response
 
 app = Flask(__name__)
 
-# The one line LALA speaks in Step 1.
-LALA_LINE = "Yaa Ali Madad. Main Amin bhai ka secretary hoon. Bhai abhi busy hain."
+# Voice + language for Amazon Polly (Indian English, handles Hinglish best).
+VOICE = "Polly.Aditi"
+LANG = "en-IN"
+
+# Lines LALA speaks.
+GREETING = "Yaa Ali Madad. Main Amin bhai ka secretary hoon. Bhai abhi busy hain."
+ASK = "Aap kaun bol rahe hain aur kya kaam hai?"
+ACK = "Theek hai, main bhai ko bata doonga."
+NO_INPUT = "Maaf kijiye, kuch sunai nahi diya. Bhai ko bata doonga ki aapka phone aaya tha."
 
 
 def twiml(body: str) -> Response:
@@ -25,30 +36,64 @@ def twiml(body: str) -> Response:
     return Response(xml, mimetype="text/xml")
 
 
+def say_slow(text: str) -> str:
+    """
+    A <Say> block slowed down with SSML prosody + a short trailing pause.
+    'rate=slow' paces the speech; the break adds breathing room after.
+    """
+    return (
+        f'<Say voice="{VOICE}" language="{LANG}">'
+        f'<prosody rate="slow">{text}</prosody>'
+        f'<break time="400ms"/>'
+        f'</Say>'
+    )
+
+
 @app.route("/voice", methods=["GET", "POST"])
 def voice():
     """
-    Twilio hits this when a call arrives at your Twilio number.
-    We tell Twilio to speak LALA's line, then hang up.
-
-    'Polly.Aditi' is an Indian-English voice that handles Hinglish far better
-    than the default robotic voice. language='en-IN' sets Indian pronunciation.
+    Entry point when a call arrives. LALA greets, asks who's calling, then
+    <Gather> listens for the caller's spoken reply and sends it to
+    /handle_response.
     """
-    body = (
-        f'<Say voice="Polly.Aditi" language="en-IN">{LALA_LINE}</Say>'
+    gather = (
+        f'<Gather input="speech" language="{LANG}" '
+        f'speechTimeout="auto" action="/handle_response" method="POST">'
+        f'{say_slow(GREETING)}'
+        f'{say_slow(ASK)}'
+        f'</Gather>'
+        # If the caller says nothing, <Gather> falls through to here.
+        f'{say_slow(NO_INPUT)}'
         f'<Hangup/>'
     )
+    return twiml(gather)
+
+
+@app.route("/handle_response", methods=["GET", "POST"])
+def handle_response():
+    """
+    Twilio posts the caller's transcribed speech here as 'SpeechResult'.
+    For Step 2 we just acknowledge and hang up. The transcription is logged
+    so you can see what Twilio heard (later steps will act on it).
+    """
+    speech = request.values.get("SpeechResult", "").strip()
+    confidence = request.values.get("Confidence", "")
+    caller = request.values.get("From", "unknown")
+
+    # Logged to Render logs — your window into what Twilio transcribed.
+    app.logger.info(f"Caller {caller} said: '{speech}' (confidence={confidence})")
+
+    body = f'{say_slow(ACK)}<Hangup/>'
     return twiml(body)
 
 
 @app.route("/", methods=["GET"])
 def health():
-    """Simple health check so you can confirm the service is awake in a browser."""
-    return "LALA voice server is running. Twilio webhook is at /voice", 200
+    """Health check — visit in a browser to confirm the service is awake."""
+    return "LALA voice server (Step 2) is running. Webhook at /voice", 200
 
 
 if __name__ == "__main__":
-    # Local run only; on Render, gunicorn runs the app (see Procfile).
     import os
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
