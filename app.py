@@ -25,7 +25,7 @@ app = Flask(__name__)
 
 # Voices
 VOICE_HI = "Google.hi-IN-Wavenet-F"     # Hindi voice (known callers)
-VOICE_EN = "Google.en-IN-Wavenet-D"     # Indian-English voice (unknown / English callers)
+VOICE_EN = "Google.en-IN-Wavenet-F"     # Indian-English voice (unknown / English callers)
 HI = "hi-IN"
 EN = "en-IN"
 
