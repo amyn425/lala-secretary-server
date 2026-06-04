@@ -1,32 +1,49 @@
 """
-LALA Secretary — listening fix.
+LALA Secretary — listening fix + per-caller greetings.
 
-Goal: make Twilio <Gather> actually capture the caller's speech, log it,
-then acknowledge and hang up. No contacts, no transfer, no SMS yet.
+Changes:
+  1. Logging uses print(..., flush=True) so From / CallSid / SpeechResult /
+     Confidence always appear in Render logs (stdout, unbuffered).
+  2. Greeting is chosen by the caller's phone number (CONTACTS table below).
+     Replace the placeholder numbers with the real ones.
 
-Key fixes vs. the broken version:
-  - Fixed speechTimeout (instead of "auto", which cut off too early).
-  - A longer overall 'timeout' so the caller has time to start speaking.
-  - speechModel="phone_call" + enhanced for better phone-audio Hinglish.
-  - A RETRY: if nothing is captured, LALA re-asks once before giving up.
-  - Full logging of SpeechResult / Confidence / From / CallSid.
-
-Flow:
-  /voice            -> greet + ask + Gather (attempt 1)
-  /handle_response  -> if speech: log + acknowledge + hang up
-                       if silence: re-ask + Gather (attempt 2)
-                       if still silence: polite close + hang up
+Still no transfer, no SMS, no message storage — just greet correctly,
+capture speech, log it, acknowledge, hang up.
 """
 
 from flask import Flask, request, Response
 
 app = Flask(__name__)
 
-# Voice for now — quality doesn't matter for the listening experiment.
 VOICE = "Google.hi-IN-Wavenet-F"
 LANG = "hi-IN"
 
-GREETING = "Yaa Ali Madad. Main Amin bhai ka secretary hoon. Bhai abhi busy hain."
+# ---- Contacts: replace placeholder numbers with real ones ----
+# Match is on the last 10 digits, so formatting (+1, spaces) doesn't matter.
+# 'lang' just notes intended tone; the greeting text is what's spoken.
+CONTACTS = {
+    "5550000001": {  # <-- REPLACE: Malka
+        "name": "Malka",
+        "greeting": "Yaa Ali Madad. Main Amin bhai ka secretary hoon. Bhai abhi busy hain.",
+    },
+    "5550000002": {  # <-- REPLACE: Lyana (calls may come from Malka's phone too)
+        "name": "Lyana",
+        "greeting": "Yaa Ali Madad. Main Amin bhai ka secretary hoon. Bhai abhi busy hain.",
+    },
+    "5550000003": {  # <-- REPLACE: Santosh (store)
+        "name": "Santosh",
+        "greeting": "Namaste Santosh bhai. Main Amin bhai ka secretary hoon. Store mein koi urgent baat hai kya?",
+    },
+    "5550000004": {  # <-- REPLACE: Mindi (store)
+        "name": "Mindi",
+        "greeting": "Hello Mindi. I am Amin bhai's secretary. Is there anything urgent regarding the store?",
+    },
+}
+
+# Default greeting for any number not in CONTACTS.
+UNKNOWN_GREETING = "Hello. I am Amin bhai's secretary. Amin bhai is busy right now."
+
+# Shared follow-up lines.
 ASK = "Aap kaun bol rahe hain, aur kya kaam hai?"
 REASK = "Bhai, phir se boliye. Aap kaun hain aur kya kaam hai?"
 ACK = "Theek hai. Main bhai ko aapka message de doonga."
@@ -39,21 +56,10 @@ def twiml(body: str) -> Response:
 
 
 def say(text: str) -> str:
-    """Plain <Say>; voice quality intentionally not a focus right now."""
     return f'<Say voice="{VOICE}" language="{LANG}">{text}</Say>'
 
 
 def gather(prompt_say: str, attempt: int) -> str:
-    """
-    A <Gather> that speaks `prompt_say` and then listens.
-
-    - input="speech": we want spoken words, not keypad.
-    - speechTimeout="3": wait 3s of silence AFTER speech to decide they're done.
-    - timeout="6": wait up to 6s for the caller to START speaking.
-    - speechModel="phone_call" + enhanced: tuned for telephone audio.
-    - action carries the attempt number so /handle_response knows if this
-      was the first try or the retry.
-    """
     return (
         f'<Gather input="speech" language="{LANG}" '
         f'speechTimeout="3" timeout="6" '
@@ -64,52 +70,70 @@ def gather(prompt_say: str, attempt: int) -> str:
     )
 
 
+def last10(number: str) -> str:
+    """Reduce a phone number to its last 10 digits for tolerant matching."""
+    digits = "".join(ch for ch in (number or "") if ch.isdigit())
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
+def greeting_for(number: str) -> str:
+    """Pick the greeting based on the caller's number."""
+    contact = CONTACTS.get(last10(number))
+    if contact:
+        return contact["greeting"]
+    return UNKNOWN_GREETING
+
+
+def contact_name(number: str) -> str:
+    contact = CONTACTS.get(last10(number))
+    return contact["name"] if contact else "Unknown"
+
+
 @app.route("/voice", methods=["GET", "POST"])
 def voice():
-    """Attempt 1: greet, ask, and listen."""
-    body = gather(say(GREETING) + say(ASK), attempt=1)
-    # If Gather itself times out with no input, it falls through to here:
+    caller = request.values.get("From", "unknown")
+    call_sid = request.values.get("CallSid", "unknown")
+    name = contact_name(caller)
+
+    print(f"[LALA] INCOMING From={caller} CallSid={call_sid} Matched={name}", flush=True)
+
+    greeting = greeting_for(caller)
+    body = gather(say(greeting) + say(ASK), attempt=1)
     body += f'{say(REASK)}'
-    body += gather("", attempt=2)  # second listen with no extra prompt
+    body += gather("", attempt=2)
     body += f'{say(GIVE_UP)}<Hangup/>'
     return twiml(body)
 
 
 @app.route("/handle_response", methods=["GET", "POST"])
 def handle_response():
-    """
-    Twilio posts the transcription here. Log everything. If we got speech,
-    acknowledge and hang up. If not, re-ask once (attempt 2), then give up.
-    """
     speech = request.values.get("SpeechResult", "").strip()
     confidence = request.values.get("Confidence", "")
     caller = request.values.get("From", "unknown")
     call_sid = request.values.get("CallSid", "unknown")
     attempt = request.args.get("attempt", "1")
+    name = contact_name(caller)
 
-    app.logger.info(
-        f"[LALA] attempt={attempt} CallSid={call_sid} From={caller} "
-        f"Confidence={confidence} SpeechResult='{speech}'"
+    print(
+        f"[LALA] RESPONSE attempt={attempt} From={caller} Matched={name} "
+        f"CallSid={call_sid} Confidence={confidence} SpeechResult='{speech}'",
+        flush=True,
     )
 
     if speech:
-        # Got something — acknowledge and end.
         return twiml(f'{say(ACK)}<Hangup/>')
 
-    # No speech captured.
     if attempt == "1":
-        # Retry: re-ask and listen again.
         body = gather(say(REASK), attempt=2)
         body += f'{say(GIVE_UP)}<Hangup/>'
         return twiml(body)
     else:
-        # Already retried — give up gracefully.
         return twiml(f'{say(GIVE_UP)}<Hangup/>')
 
 
 @app.route("/", methods=["GET"])
 def health():
-    return "LALA voice server (listening fix) is running. Webhook at /voice", 200
+    return "LALA voice server (greetings + logging) is running. Webhook at /voice", 200
 
 
 if __name__ == "__main__":
