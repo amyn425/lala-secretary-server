@@ -44,7 +44,7 @@ CONTACTS = {
         "greeting": "Yaa Ali Madad, Mom. Main Amin ka secretary hoon. Amin abhi busy hain. Main bhai ko bata dunga ki aap ne call kiya tha.",
         "ask": "Aap message bol dijiye beep ke baad.",
     },
-    "5550000002": {
+    "3373755027": {
         "name": "Malka",
         "shared": True,
         "greeting": "Hello. Main bhai ka secretary hoon. Bhai abhi busy hain.",
@@ -143,7 +143,9 @@ def say(text, english=False):
 
 
 def beep():
-    return f'<Play>{BEEP_URL}</Play>'
+    # Native short pause + spoken-free tone via <Play digits>. Using Twilio's
+    # built-in DTMF tone generator (no external file to fetch, can't fail).
+    return '<Play digits="9"></Play>'
 
 
 def time_greeting():
