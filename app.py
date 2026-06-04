@@ -26,7 +26,7 @@ CONTACTS = {
         "name": "Malka",
         "greeting": "Yaa Ali Madad. Main Amin bhai ka secretary hoon. Bhai abhi busy hain.",
     },
-    "5550000002": {  # <-- REPLACE: Lyana (calls may come from Malka's phone too)
+    "3373755027": {  # <-- REPLACE: Lyana (calls may come from Malka's phone too)
         "name": "Lyana",
         "greeting": "Yaa Ali Madad. Main Amin bhai ka secretary hoon. Bhai abhi busy hain.",
     },
