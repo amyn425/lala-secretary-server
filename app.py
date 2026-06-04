@@ -50,7 +50,7 @@ CONTACTS = {
         "greeting": "Hello. Main bhai ka secretary hoon. Bhai abhi busy hain.",
         "ask": "Aap Malka bhabhi hain ya Lyana beta? Aur kya baat hai, beep ke baad boliye.",
     },
-    "5550000003": {
+    "3373755027": {
         "name": "Lyana",
         "greeting": "Hello beautiful Lyana. Baba abhi busy hain.",
         "ask": "Aap batao beta, koi important baat hai? Beep ke baad boliye.",
